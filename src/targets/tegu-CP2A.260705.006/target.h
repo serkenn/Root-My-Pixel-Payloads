@@ -1,6 +1,8 @@
-// tegu — Pixel 9a
+// tegu — Pixel 9a, Android 17
 // Build: CP2A.260705.006
 // Kernel: 6.1.157-android14-11-gbd23337e42e7-ab14791245  (KMI android14-6.1)
+// Codename, build ID, fingerprint and kernel release above are confirmed
+// against a physical Pixel 9a on this build.
 //
 // PROVENANCE
 // ==========
@@ -39,7 +41,7 @@
 #define BUILD_VARIANT_LABEL "tegu-CP2A.260705.006-root-umh"
 #endif
 #ifndef BUILD_FINGERPRINT
-#define BUILD_FINGERPRINT "google/tegu/tegu:15/CP2A.260705.006/TODO:user/release-keys"
+#define BUILD_FINGERPRINT "google/tegu/tegu:17/CP2A.260705.006/15641320:user/release-keys"
 #endif
 
 // ── Base / memory layout ────────────────────────────────────────────────
