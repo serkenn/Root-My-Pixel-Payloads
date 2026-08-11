@@ -99,6 +99,12 @@
 #define LEFT_OFF        0x5550
 #define FAKE_TASK_OFF   0x3200
 
+// struct rt_mutex_waiter (android15-6.6, size 0x70): tree and pi_tree are
+// each a struct rt_waiter_node { rb_node entry; int prio; u64 deadline; },
+// so both nodes carry their own prio and deadline. tegu (android14-6.1) has
+// a flat struct with one shared prio/deadline and a different field order —
+// these macros are what lets slide.c/util.c stay layout-agnostic.
+#define FAKE_WAITER_TREE_ENTRY_OFF      0x00
 #define FAKE_WAITER_TREE_PRIO_OFF       0x18
 #define FAKE_WAITER_TREE_DEADLINE_OFF   0x20
 #define FAKE_WAITER_PI_TREE_ENTRY_OFF   0x28
@@ -108,6 +114,7 @@
 #define FAKE_WAITER_LOCK_OFF            0x58
 #define FAKE_WAITER_WAKE_STATE_OFF      0x60
 #define FAKE_WAITER_WW_CTX_OFF          0x68
+#define FAKE_WAITER_SIZE                0x70
 
 #define FAKE_TASK_USAGE_OFF         0x40
 #define FAKE_TASK_PRIO_OFF          0x84

