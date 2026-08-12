@@ -217,6 +217,20 @@
 #define RECLAIM_KEEP_PCP_SHAPING 1
 #define SKB_RECLAIM_SENDS 12
 
+// Raised from common.h's 5. Unfreezing the target slab is necessary but not
+// sufficient: __unfreeze_partials() only hands an empty slab back to the page
+// allocator when n->nr_partial >= s->min_partial, and parks it on the node
+// partial list otherwise — still owned by the cache, so the reclaim still
+// cannot win it. min_partial is 5 for this cache (set_min_partial does
+// ilog2(1024)/2, clamped up to MIN_PARTIAL), and the spray only builds
+// MM_PARTIALS + 1 = 6 slabs, so the node list is barely at the threshold when
+// the target unfreezes. With the fix at MM_PARTIALS 5 the slide route landed
+// once in five runs on this device; the other four panicked in
+// rt_mutex_top_waiter() on a page that had gone back out as an mm_struct.
+// More spray slabs raise both the node partial count and the number of
+// cpu_partial overflows that do the unfreezing.
+#define MM_PARTIALS 12
+
 // CONFIG_SLUB_CPU_PARTIAL is set on this build, and the panic dumps say the
 // emptied target slab is being handed straight back out as an mm_struct
 // rather than reaching the page allocator — fake_lock + 0x10 read 0x91b on
