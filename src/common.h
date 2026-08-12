@@ -67,7 +67,15 @@
 #define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
 #define PIPE_CANDIDATE_PAGES 8
 #define SKB_SEND_SIZE (ORDER3_SIZE * 2)
+#ifndef SKB_RECLAIM_SENDS
 #define SKB_RECLAIM_SENDS 4
+#endif
+// See prepare_kernel_page(): 1 keeps the PCP-shaping skb queued across the
+// reclaim sends so every send has to allocate a fresh order-3 page. 0 is the
+// original ordering.
+#ifndef RECLAIM_KEEP_PCP_SHAPING
+#define RECLAIM_KEEP_PCP_SHAPING 0
+#endif
 #define FOPS_TABLE_OFF FOPS_OFF
 #define SKB_FRAG_BIAS 0
 
