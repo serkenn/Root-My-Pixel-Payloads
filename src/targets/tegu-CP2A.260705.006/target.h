@@ -233,19 +233,16 @@
 #define RECLAIM_KEEP_PCP_SHAPING 1
 #define SKB_RECLAIM_SENDS 12
 
-// Raised from common.h's 5. Unfreezing the target slab is necessary but not
-// sufficient: __unfreeze_partials() only hands an empty slab back to the page
-// allocator when n->nr_partial >= s->min_partial, and parks it on the node
-// partial list otherwise — still owned by the cache, so the reclaim still
-// cannot win it. min_partial is 5 for this cache (set_min_partial does
-// ilog2(1024)/2, clamped up to MIN_PARTIAL), and the spray only builds
-// MM_PARTIALS + 1 = 6 slabs, so the node list is barely at the threshold when
-// the target unfreezes. With the fix at MM_PARTIALS 5 the slide route landed
-// once in five runs on this device; the other four panicked in
-// rt_mutex_top_waiter() on a page that had gone back out as an mm_struct.
-// More spray slabs raise both the node partial count and the number of
-// cpu_partial overflows that do the unfreezing.
-#define MM_PARTIALS 12
+// Left at common.h's 5. Raising it to 12 was meant to lift n->nr_partial past
+// s->min_partial so __unfreeze_partials() would discard the emptied target
+// slab to the page allocator instead of parking it on the node partial list.
+// It did not help and looks like it hurt: the slide route landed 2 of 5 runs
+// at 5 and 1 of 8 at 12. The likely reason is that MM_PARTIALS also sizes the
+// spray, so 12 takes the spray from 192 children to 416, and every one of them
+// is another mm_struct allocation and free competing for the page the reclaim
+// is trying to win. The threshold argument still stands on its own; it just
+// cannot be bought this way. The sample is small, so this is a revert to the
+// configuration with the better observed rate, not a settled result.
 
 // CONFIG_SLUB_CPU_PARTIAL is set on this build, and the panic dumps say the
 // emptied target slab is being handed straight back out as an mm_struct
