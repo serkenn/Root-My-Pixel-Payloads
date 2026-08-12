@@ -153,9 +153,18 @@ void log_startup_context(void) {
              getpid(), getuid(), geteuid(), getgid(), getegid(), attr,
              enforce);
   pr_success("startup limits pid=%d %s\n", getpid(), limits);
-  pr_success("build config pid=%d label=%s slide=pselect main=pselect "
+  // Report the route that will actually run. These were literals reading
+  // "slide=pselect main=pselect" regardless of configuration, so a tegu log
+  // claimed the pselect main route while MAIN_TCP_ROUTE_DEFAULT 1 had it on
+  // the TCP one — the line is the first thing anyone reads to find out what a
+  // run did, and it was the one thing that could not be trusted.
+  pr_success("build config pid=%d label=%s slide=pselect main=%s payload=%s "
              "build=" BUILD_TAG "\n",
-             getpid(), BUILD_VARIANT_LABEL);
+             getpid(), BUILD_VARIANT_LABEL,
+             env_flag("MAIN_TCP_ROUTE", MAIN_TCP_ROUTE_DEFAULT) ? "tcp"
+                                                                : "pselect",
+             env_flag("MAIN_TCP_PAYLOAD", MAIN_TCP_PAYLOAD_DEFAULT) ? "tcp"
+                                                                    : "std");
   pr_success("p0 profile pid=%d phys_offset=%016llx kernel_phys_load=%016llx "
              "delta=%016llx slide_logger=%016llx bootid_data=%016llx "
              "init_task=%016llx root_tg=%016llx sysctl_bootid=%016llx\n",

