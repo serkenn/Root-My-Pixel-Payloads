@@ -60,8 +60,20 @@ void open_selected_fds(
     pr_warning("pselect F_DUPFD write errno=%d\n", errno);
     return;
   }
+  // Every selected fd has to be valid but never ready, otherwise pselect
+  // returns instead of blocking and the fd_set copy is off the kernel stack
+  // before the consumer can act on it.
+  //
+  // A pipe's write end satisfies that for the readable and exception sets, and
+  // that is all the 6.6 waiter layout ever populates. A target whose layout
+  // puts a field in the writable set is a different matter: a write end is
+  // always writable, so pselect would return immediately with every one of
+  // those fds ready. Hand those the read end instead — never writable, and not
+  // readable either while the pipe stays empty.
   for (int fd = 0; fd < PSELECT_ROUTE_NFDS; fd++) {
-    if (FD_ISSET(fd, in) || FD_ISSET(fd, out) || FD_ISSET(fd, ex)) {
+    if (FD_ISSET(fd, out)) {
+      dup2(read_fd, fd);
+    } else if (FD_ISSET(fd, in) || FD_ISSET(fd, ex)) {
       dup2(high_write, fd);
     }
   }
