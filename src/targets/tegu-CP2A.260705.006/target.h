@@ -206,6 +206,18 @@
 // log line records which pair was used so a success names the winner.
 #define SLIDE_TIMING_SWEEP 1
 
+// Push every log line to disk. tegu still panics the kernel on some attempts,
+// and a panic drops the page cache: the redirected exploit.log comes back
+// truncated at whatever had already been flushed, which is exactly the lines
+// before the one worth reading. The sweep and the settled= diagnostics are
+// useless if the panic eats them.
+//
+// The cost is an fsync per log line, and KernelSnitch is a timing side
+// channel — but nothing logs inside the timed sections. The lines are emitted
+// between retries and after the race, so the perturbation does not land where
+// it would matter. Remove this once tegu stops panicking.
+#define PR_DURABLE_LOG 1
+
 #define SLIDE_NFULNL_LOGGER_IMAGE (KIMAGE_TEXT_BASE + SLIDE_NFULNL_LOGGER_OFF)
 #define SLIDE_LOGGERS_0_1_IMAGE (KIMAGE_TEXT_BASE + SLIDE_LOGGERS_0_1_OFF)
 #define SLIDE_RANDOM_BOOT_ID_DATA_IMAGE (KIMAGE_TEXT_BASE + SLIDE_RANDOM_BOOT_ID_DATA_OFF)
