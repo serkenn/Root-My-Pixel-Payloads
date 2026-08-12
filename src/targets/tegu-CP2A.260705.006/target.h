@@ -337,14 +337,20 @@
 // SLUB object size of the mm_struct cache, and KernelSnitch strides the slab by
 // it — a wrong value means the scan never lands on a live mm_struct and the
 // leak fails on every retry.
-//   sizeof(struct mm_struct) = 960 (BTF)
-//   mm_cachep uses SLAB_HWCACHE_ALIGN, so the object is aligned up to
-//   cache_line_size(); the device reports LEVEL1_DCACHE_LINESIZE = 64 and 960
-//   is already a multiple of 64, so it stays 960.
-// MM_ORDER needs no override: SLUB's calculate_order for a 960-byte object on
-// 8 CPUs lands on order 3 (34 objects per slab, 128 bytes waste, well inside
-// the 1/16 threshold), which is what common.h already uses.
-#define MM_STRUCT_SZ                  0x3c0
+//
+// sizeof(struct mm_struct) is 960 in this build's BTF, but that is NOT the
+// object size. proc_caches_init() sizes the cache as
+//     mm_size = sizeof(struct mm_struct) + cpumask_size();
+// because mm_struct ends with the cpu_bitmap[] flexible array, which BTF
+// reports as zero-length. CONFIG_NR_CPUS=32 and CONFIG_CPUMASK_OFFSTACK is
+// unset, so cpumask_size() is BITS_TO_LONGS(32) * 8 = 8:
+//     960 + 8 = 968, then SLAB_HWCACHE_ALIGN rounds up to the 64-byte
+//     cache line => 1024.
+// Confirmed against the device, where /proc/slabinfo is world-readable:
+//     mm_struct  999  1276  1024  32  8
+// i.e. objsize 1024, 32 objects per slab, 8 pages per slab. The 8 pages also
+// re-confirm MM_ORDER 3, so that still needs no override.
+#define MM_STRUCT_SZ                  0x400
 
 // DIVERGENCE: overrides common.h's 2 / 4, which are the 6.6 values. From this
 // build's BTF, enum kmalloc_cache_type is
@@ -357,6 +363,13 @@
 // cache instead, and pipe_cache_matches() would never match. The row count
 // matters too: KMALLOC_CACHE_SLOTS sizes the bulk read of kmalloc_caches, and
 // 4 rows would read 112 bytes past the end of a 3-row array.
+// Both values still hold even though this device boots with
+// cgroup.memory=nokmem (see /proc/cmdline), which is why /proc/slabinfo lists
+// only kmalloc-* and kmalloc-rcl-* and no kmalloc-cg-* at all. nokmem makes
+// new_kmalloc_cache() alias the CGROUP row onto NORMAL rather than remove it,
+// so the enum — and therefore the row count — is unchanged, row 1 is a valid
+// cache pointer, and GFP_KERNEL_ACCOUNT pipe_buffer arrays land in that same
+// cache. Do not "fix" this to 0 on the strength of the missing cg caches.
 #define KMALLOC_CGROUP_TYPE           1
 #define KMALLOC_CACHE_TYPES           3
 #define PIPE_BUFFER_SIZE              0x28
