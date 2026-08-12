@@ -76,6 +76,12 @@
 #ifndef RECLAIM_KEEP_PCP_SHAPING
 #define RECLAIM_KEEP_PCP_SHAPING 0
 #endif
+// See prepare_kernel_page(): 1 defers the strided spray_ctx closes until after
+// the target slab is empty, so they unfreeze it off the per-CPU partial list
+// instead of leaving it frozen there. 0 is the original ordering.
+#ifndef RECLAIM_SPRAY_AFTER_LEAK_FREE
+#define RECLAIM_SPRAY_AFTER_LEAK_FREE 0
+#endif
 #define FOPS_TABLE_OFF FOPS_OFF
 #define SKB_FRAG_BIAS 0
 

@@ -217,6 +217,16 @@
 #define RECLAIM_KEEP_PCP_SHAPING 1
 #define SKB_RECLAIM_SENDS 12
 
+// CONFIG_SLUB_CPU_PARTIAL is set on this build, and the panic dumps say the
+// emptied target slab is being handed straight back out as an mm_struct
+// rather than reaching the page allocator — fake_lock + 0x10 read 0x91b on
+// two different boots, which is mm_struct.data_vm (BTF offset 0xe0) of one
+// of this process's own clones at object #1 of a re-used slab. That is the
+// signature of a slab that emptied while still frozen on the per-CPU partial
+// list. Defer the strided spray closes so they overflow cpu_partial_slabs
+// after the target is empty and push it out to the page allocator.
+#define RECLAIM_SPRAY_AFTER_LEAK_FREE 1
+
 // Push every log line to disk. tegu still panics the kernel on some attempts,
 // and a panic drops the page cache: the redirected exploit.log comes back
 // truncated at whatever had already been flushed, which is exactly the lines
